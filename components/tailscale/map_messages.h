@@ -30,11 +30,26 @@ public:
           return Result::Invalid;
         }
       }
-      if (!message_)
-        message_.reset(new (std::nothrow) char[Capacity]);
-      if (!message_) {
-        invalid_ = true;
-        return Result::Invalid;
+      if (wanted_ + 1 > allocated_) {
+        // Grow geometrically to avoid reallocating for every slightly larger
+        // map. The prefix is bounded before allocation; retain storage for
+        // reuse.
+        size_t target = allocated_ ? allocated_ * 2 : 256;
+        if (target < wanted_ + 1)
+          target = wanted_ + 1;
+        if (target > Capacity)
+          target = Capacity;
+        // A new prefix invalidates the previously returned message. No partial
+        // body needs preserving here; release it before growing to avoid a
+        // transient old+new buffer peak on devices without PSRAM.
+        message_.reset();
+        allocated_ = 0;
+        message_.reset(new (std::nothrow) char[target]);
+        if (!message_) {
+          invalid_ = true;
+          return Result::Invalid;
+        }
+        allocated_ = target;
       }
       const size_t available = size - consumed;
       const size_t needed = wanted_ - used_;
@@ -57,9 +72,12 @@ public:
   }
   const char *data() const { return message_.get(); }
   size_t size() const { return delivered_; }
+  size_t allocated_capacity() const { return allocated_; }
 
 private:
+  static_assert(Capacity > 1, "Map capacity must include a terminator");
   std::unique_ptr<char[]> message_;
+  size_t allocated_{0};
   uint8_t prefix_[4]{};
   size_t prefixSize_{0}, used_{0}, wanted_{0}, delivered_{0};
   bool invalid_{false};

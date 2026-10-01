@@ -165,4 +165,109 @@ int main() {
   assert(post.init(post.send_cb_, post.recv_cb_));
   assert(!post.stream_failed() && post.deferred_.empty() &&
          post.persistent_stream_ == 0);
+
+  // Small keepalives should not reserve a full 64 KiB map buffer.
+  assert(combined.map_messages_.allocated_capacity() <= 512);
+  MapMessages<1024> maps;
+  auto feedMap = [](auto &assembler, const std::string &body) {
+    std::vector<uint8_t> wire = {uint8_t(body.size()),
+                                 uint8_t(body.size() >> 8), 0, 0};
+    wire.insert(wire.end(), body.begin(), body.end());
+    size_t consumed = 0;
+    return assembler.feed(wire.data(), wire.size(), consumed);
+  };
+  assert(feedMap(maps, json) == MapMessages<1024>::Result::Ready);
+  const auto smallCapacity = maps.allocated_capacity();
+  const char *smallStorage = maps.data();
+  assert(smallCapacity <= 512 && maps.size() == json.size());
+  assert(feedMap(maps, json) == MapMessages<1024>::Result::Ready &&
+         maps.data() == smallStorage);
+  assert(feedMap(maps, std::string(600, 'x')) ==
+         MapMessages<1024>::Result::Ready);
+  const char *grownStorage = maps.data();
+  assert(maps.allocated_capacity() >= 601 && maps.allocated_capacity() <= 1024);
+  assert(feedMap(maps, json) == MapMessages<1024>::Result::Ready &&
+         maps.data() == grownStorage);
+  assert(feedMap(maps, std::string(1023, 'x')) ==
+         MapMessages<1024>::Result::Ready);
+  assert(feedMap(maps, std::string(1024, 'x')) ==
+         MapMessages<1024>::Result::Invalid);
+  maps.reset();
+  assert(feedMap(maps, json) == MapMessages<1024>::Result::Ready);
+
+  // Two legal maximum-size frames exceed 32 KiB; do not discard them.
+  Fixture large;
+  std::vector<uint8_t> block(16384, 42);
+  dataFrame(large, block);
+  dataFrame(large, block);
+  assert(large.read_frame_(f, 1) && f.payload == block);
+  assert(large.read_frame_(f, 1) && f.payload == block && large.pulls == 0);
+  Fixture tooLarge;
+  tooLarge.pending.resize(40961);
+  assert(!tooLarge.pull_bytes_(1) && tooLarge.stream_failed() &&
+         tooLarge.recv_buffer_.empty());
+
+  auto finite = [&](const std::vector<uint8_t> &body, uint8_t flags = 1) {
+    auto trial = std::make_unique<Fixture>();
+    trial->recv_buffer_ = {0, 0, 1, 1, 4, 0, 0, 0, 5, 0x88};
+    const auto n = body.size();
+    trial->recv_buffer_.insert(
+        trial->recv_buffer_.end(),
+        {uint8_t(n >> 16), uint8_t(n >> 8), uint8_t(n), 0, flags, 0, 0, 0, 5});
+    trial->recv_buffer_.insert(trial->recv_buffer_.end(), body.begin(),
+                               body.end());
+    return trial;
+  };
+  auto truncated = finite({'{'});
+  assert(!truncated->post_json(5, "https", "example", "/map", "{}", result,
+                               size, status, 10, true, false));
+  assert(truncated->stream_failed());
+  auto empty = finite({});
+  assert(empty->post_json(5, "https", "example", "/map", "{}", result, size,
+                          status, 10, true, false));
+  assert(status == 200 && size == 0);
+  auto padded = finite({1, '{', '}'}, 9);
+  assert(!padded->post_json(5, "https", "example", "/map", "{}", result, size,
+                            status, 10, true, false));
+  auto noBody = std::make_unique<Fixture>();
+  noBody->recv_buffer_ = {0, 0, 1, 1, 5, 0, 0, 0, 5, 0x88};
+  assert(noBody->post_json(5, "https", "example", "/map", "{}", result, size,
+                           status, 10, true, false) &&
+         size == 0);
+  assert(Fixture::has_complete_json_("{}", 2));
+  const std::string trailing = "{}" + std::string(1500, ' ') + "x";
+  assert(!Fixture::has_complete_json_(trailing.data(), trailing.size()));
+  assert(!Fixture::has_complete_json_("{\"x\":\"broken}", 13));
+  // Oversized full bodies fail instead of returning a silently truncated
+  // prefix.
+  Fixture overflow;
+  overflow.recv_buffer_ = {0, 0, 1, 1, 4, 0, 0, 0, 5, 0x88};
+  unsigned calls = 0;
+  overflow.recv_cb_ = [&](std::vector<uint8_t> &out, uint32_t) {
+    if (calls == 4)
+      return false;
+    out = {0, 64, 0, 0, uint8_t(calls == 3), 0, 0, 0, 5};
+    out.resize(9 + 16384, ' ');
+    if (calls++ == 0)
+      out[9] = '{';
+    return true;
+  };
+  assert(!overflow.post_json(5, "https", "example", "/map", "{}", result, size,
+                             status, 10, true, false));
+  assert(overflow.stream_failed());
+
+  // A complete object followed by junk in another DATA frame is not complete.
+  auto trailingData = finite({'{', '}'}, 0);
+  trailingData->recv_buffer_.insert(trailingData->recv_buffer_.end(),
+                                    {0, 0, 1, 0, 1, 0, 0, 0, 5, 'x'});
+  assert(!trailingData->post_json(5, "https", "example", "/map", "{}", result,
+                                  size, status, 10, true, false));
+  assert(trailingData->stream_failed());
+  Fixture badStream;
+  Frame unexpected;
+  unexpected.stream_id = 11;
+  assert(!badStream.defer_frame_(std::move(unexpected)) &&
+         badStream.stream_failed());
+  assert(!badStream.post_json(5, "https", "example", "/map", "{}", result, size,
+                              status, 10, true, false));
 }

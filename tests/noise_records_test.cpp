@@ -36,4 +36,38 @@ int main() {
   assert(!limit.append(huge.data(), 1));
   limit.clear();
   assert(limit.state() == Records::State::Incomplete);
+
+  // Consume many coalesced records, then force a tail compaction on append.
+  Records cursor;
+  std::vector<uint8_t> batch;
+  for (unsigned i = 0; i < 640; ++i) {
+    auto item = record;
+    item[3] = uint8_t(i);
+    batch.insert(batch.end(), item.begin(), item.end());
+  }
+  assert(cursor.append(batch.data(), batch.size()));
+  for (unsigned i = 0; i < 400; ++i) {
+    assert(cursor.state() == Records::State::Ready &&
+           cursor.ciphertext()[0] == uint8_t(i));
+    cursor.consume();
+  }
+  const auto *before = cursor.ciphertext();
+  cursor.consume();
+  assert(cursor.ciphertext() ==
+         before + record.size()); // No per-record payload shift.
+  batch.clear();
+  for (unsigned i = 640; i < 1040; ++i) {
+    auto item = record;
+    item[3] = uint8_t(i);
+    batch.insert(batch.end(), item.begin(), item.end());
+  }
+  assert(cursor.append(batch.data(), batch.size()));
+  for (unsigned i = 401; i < 1040; ++i) {
+    assert(cursor.state() == Records::State::Ready &&
+           cursor.ciphertext()[0] == uint8_t(i));
+    cursor.consume();
+  }
+  assert(cursor.state() == Records::State::Incomplete);
+  assert(!cursor.append(nullptr, 1));
+  cursor.consume(); // Safe even with no complete header.
 }

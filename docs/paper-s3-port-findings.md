@@ -28,6 +28,13 @@ included here from integration work that requires further review.
   controlbase records. The assembler retains partial records and decrypts one
   complete bounded record at a time rather than discarding trailing bytes.
 - **Request server keepalives on the original streaming map.**
+- **Reject truncated/oversized finite JSON bodies without accepting a partial
+  prefix.** Structural completion is checked once at END_STREAM, including trailing
+  DATA. Empty finite responses are allowed. The application still validates JSON
+  syntax/schema. The short-body unsigned-underflow heuristic is removed.
+- **Retain valid coalesced frames up to the receive bound.** Do not clear the
+  stream buffer at 32 KiB while a separate receive path allows 40 KiB. Enforce
+  that bound before appending, and latch fatal framing/queue failures.
 - **Poll buffered control data even without a new socket-readiness event.**
   Decrypted bytes can remain available after `select()` reports no new socket bytes.
 
@@ -38,12 +45,19 @@ Protocol references:
 
 ## Memory tradeoffs in this backport
 
-The persistent map assembler allocates a 64 KiB buffer lazily, only after a valid
-length prefix, with a checked nonthrowing allocation. It is retained and reused.
+The persistent map assembler allocates lazily after a valid length prefix, starting
+at 256 bytes and growing geometrically as required up to 64 KiB. Checked nonthrowing
+allocations fail closed. The host keepalive fixture uses 256 bytes instead of the
+previous fixed 65,536-byte allocation: 65,280 fewer reserved bytes for that case.
+Storage is retained/reused for smaller messages. During growth the prior message
+buffer is released first, avoiding an old+new allocation peak. Returned pointers
+are valid until the next feed/reset; a partially assembled map is never discarded.
 Separate storage is required: an endpoint POST must not overwrite a partially
 assembled streaming message. The existing finite-response buffer remains intact.
 The Noise assembler adds 12 KiB to the transport object, sufficient for one
-incomplete controlbase record plus an 8 KiB incoming chunk. Deferred frames can
+incomplete controlbase record plus an 8 KiB incoming chunk. Consuming records
+advances a cursor; compaction happens only when an append needs tail space.
+Deferred frames can
 retain up to 64 KiB of payload plus vector overhead.
 
 These are explicit bounds, **not a claim of lower RAM use on ESP32-C3**. The reader
@@ -115,8 +129,10 @@ Run `python3 tests/run_host_tests.py` for:
 - the actual HTTP/2 implementation under ASan/UBSan, including buffered/partial
   frames, payload ownership, interleaved finite POST + streaming DATA, END_STREAM
   consumption, queue bounds, every map-message split, coalesced messages and reset;
+  adaptive map allocation/reuse, >32 KiB coalesced frames, receive/response limits,
+  padded/truncated responses, empty responses and trailing DATA;
 - independent HPACK encoder fixtures, including Huffman status codes;
-- split/coalesced Noise records, invalid types/lengths and buffer bounds;
+- split/coalesced Noise records, invalid types/lengths, buffer bounds and cursor compaction;
 - host syntax checking of the complete TS2021 transport source.
 
 The hardware evidence comes from the **downstream reader integration**, which

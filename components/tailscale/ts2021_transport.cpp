@@ -452,6 +452,7 @@ bool Ts2021Transport::http2_post_json(const std::string &scheme, const std::stri
   if (!this->http2_session_->post_json(stream_id, scheme, authority, path, payload, response_ptr, response_size,
                                        status_code, timeout_ms, close_stream, filter_node_only)) {
     ESP_LOGE(TAG, "HTTP/2 POST failed for %s (stream_id=%u)", path.c_str(), stream_id);
+    if (this->http2_session_->stream_failed()) this->mark_failed();
 
     // DO NOT reset HTTP/2 session for stream desync errors
     // Stream desync happens when multiple streams are active (e.g., streaming map + keepalive)
