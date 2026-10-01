@@ -874,8 +874,6 @@ void TailscaleComponent::handle_connected_state_() {
 
   // Send periodic endpoint updates every 60 seconds
   // These are sent on NEW HTTP/2 streams, not on the persistent receiving stream
-  static uint32_t last_keepalive_send_time = 0;
-  static bool first_keepalive_init = true;
   uint32_t current_time = millis();
   const uint32_t KEEPALIVE_SEND_INTERVAL_MS = 60000;  // 60 seconds
 
@@ -929,7 +927,6 @@ void TailscaleComponent::handle_connected_state_() {
   // This handles hairpin NAT situations where some peers on same NAT need DERP
   bool all_direct_paths_confirmed = true;
   bool any_direct_path_confirmed = false;
-  static uint32_t direct_mode_start_time = 0;
   static const uint32_t DIRECT_MODE_FALLBACK_TIMEOUT = 30000;  // 30s to confirm direct path
 
   if (this->prefer_direct_udp_) {
@@ -956,10 +953,6 @@ void TailscaleComponent::handle_connected_state_() {
   // This enables DERP for hairpin NAT scenarios where peers share same external IP
   bool skip_derp = this->prefer_direct_udp_ &&
                    (all_direct_paths_confirmed || (now - direct_mode_start_time < DIRECT_MODE_FALLBACK_TIMEOUT));
-  static bool logged_skip_derp = false;  // Only log once
-  static bool logged_derp_fallback = false;
-  static uint32_t derp_backoff_until = 0;  // Backoff timestamp for failed connections
-  static int derp_consecutive_failures = 0;  // Track consecutive failures
 
   // Debug: Log DERP state check
   static uint32_t last_derp_check_log = 0;
@@ -1019,7 +1012,6 @@ void TailscaleComponent::handle_connected_state_() {
   // Step 2: Periodic WireGuard handshake maintenance
   // Ensures active peers have a valid WireGuard session, especially for Direct UDP
   // INCREASED INTERVAL: 5s -> 60s to avoid WDT crashes caused by frequent Curve25519 re-keying
-  static uint32_t last_handshake_check = 0;
   if (now - last_handshake_check >= 60000) {  // Check every 60 seconds
     bool derp_ready = (this->derp_client_ && this->derp_client_->is_ready());
     bool direct_mode = skip_derp;
@@ -1067,9 +1059,6 @@ void TailscaleComponent::handle_connected_state_() {
 
   // NAT-PMP: Request port mapping ONCE at startup (before TTL discovery)
   // This is simpler and faster than TTL-based discovery
-  static bool natpmp_requested = false;
-  static uint32_t natpmp_request_time = 0;
-  static bool natpmp_success = false;
 
   if (!natpmp_requested && this->unified_socket_ >= 0) {
     // Request NAT-PMP mapping (sends UDP packet to gateway)
@@ -1140,8 +1129,6 @@ void TailscaleComponent::handle_connected_state_() {
   }
 
   // Send periodic disco pings to maintain peer connectivity (every 10 seconds)
-  static uint32_t last_disco_ping_time = 0;
-  static uint32_t last_nat_discovery_time = 0;
   // Reuse 'now' from earlier in function (declared at line 614)
   if (now - last_disco_ping_time >= 10000) {  // 10 second interval
     ESP_LOGD(TAG, "→ Sending periodic disco ping to peers...");
@@ -1177,7 +1164,6 @@ void TailscaleComponent::handle_connected_state_() {
 
   // Send periodic WireGuard keepalives to maintain tunnel session (every 20 seconds)
   // This prevents NAT mappings from expiring and keeps WireGuard session active
-  static uint32_t last_wg_keepalive_time = 0;
   if (now - last_wg_keepalive_time >= 20000) {  // 20 second interval
     if (this->derp_client_ && !this->node_config_.peers.empty()) {
       // Send minimal WireGuard keepalive packet (empty payload with WG header)

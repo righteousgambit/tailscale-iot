@@ -208,6 +208,21 @@ class TailscaleComponent : public PollingComponent {
   std::string base64_decode(const std::string& encoded);
   std::string hex_decode(const std::string& hex_str);
 
+  // Per-client state; reconnect must not inherit NAT mappings/backoff/timers.
+  uint32_t last_keepalive_send_time{0};
+  bool first_keepalive_init{true};
+  uint32_t direct_mode_start_time{0};
+  bool logged_skip_derp{false};
+  bool logged_derp_fallback{false};
+  uint32_t derp_backoff_until{0};
+  int derp_consecutive_failures{0};
+  uint32_t last_handshake_check{0};
+  bool natpmp_requested{false};
+  uint32_t natpmp_request_time{0};
+  bool natpmp_success{false};
+  uint32_t last_disco_ping_time{0};
+  uint32_t last_nat_discovery_time{0};
+  uint32_t last_wg_keepalive_time{0};
   // NVS key persistence
   bool load_keys_from_nvs_();
   bool save_keys_to_nvs_();

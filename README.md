@@ -111,3 +111,17 @@ Run `python3 tests/run_host_tests.py` with clang++ to exercise control-plane
 framing and status decoding under ASan/UBSan without credentials or hardware.
 See [Paper S3 port findings](docs/paper-s3-port-findings.md) for the downstream
 hardware evidence, memory tradeoffs, and further improvements to review.
+
+#### Reconstructed client timers
+
+Connection-specific endpoint-refresh, relay-backoff, WireGuard maintenance,
+discovery, and NAT-PMP state is owned by each component instance. Constructing a
+new client does not inherit the previous network's NAT mapping or failed relay's
+backoff, and its first periodic endpoint update waits a full minute after entering
+connected state. This adds fixed member storage, with no extra allocation.
+
+`python3 tests/check_connection_timers.py` compiles the actual endpoint-update
+block and member declarations under ASan/UBSan, exercising reconstruction at
+high uptime, failed-update retry throttling, and timer wrap. The other host tests
+remain applicable. ESPHome/C3 firmware and physical behavior still require
+validation on the upstream targets; Paper S3 validation uses its reader adapter.
