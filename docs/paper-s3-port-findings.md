@@ -159,3 +159,20 @@ Downstream code and reproducible adaptation:
 [Paper S3 draft PR #24](https://github.com/Polaris-EcoSystems/paper-s3-dev/pull/24),
 [patch preparation script](https://github.com/Polaris-EcoSystems/paper-s3-dev/blob/6814fd9/experimental/tailscale/prepare.py),
 [trial notes](https://github.com/Polaris-EcoSystems/paper-s3-dev/blob/6814fd9/experimental/tailscale/README.md).
+
+
+## IO lifecycle follow-up
+
+IO stop uses an atomic exit acknowledgement instead of querying a task handle
+that may already have been deleted. A two-second timeout preserves that handle
+and reports failure; STUN does not read the shared socket after a failed stop.
+The task publishes acknowledgement after its final access to the component.
+TCP readiness/monitor flags are atomic across cores. Packet-pool pointers are
+zero initialized, and DERP initialization success belongs to each component
+instance instead of a process-wide static flag.
+
+The host runner extracts and compiles the actual stop method, testing immediate,
+delayed, deadline-bound and missing acknowledgements with ASan/UBSan. These tests
+stub scheduling; they do not validate FreeRTOS multicore timing or full upstream
+component destruction. The downstream Paper S3 build adds explicit socket,
+queue, route and protocol cleanup and is undergoing live reconnect validation.

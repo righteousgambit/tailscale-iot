@@ -5,6 +5,7 @@ Requires Python 3 and clang++; no ESPHome installation or live credentials.
 The ESPHome stubs provide only logging, watchdog, clock and heap telemetry.
 """
 import os
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -28,3 +29,5 @@ with tempfile.TemporaryDirectory(prefix='tailscale-iot-host-') as directory:
                     '-I' + str(root / 'components/tailscale/noise/include'),
                     str(root / 'components/tailscale/ts2021_transport.cpp')], check=True)
     print('TS2021 transport: host syntax check passed')
+
+subprocess.run([sys.executable, str(root / "tests/check_io_shutdown.py")], check=True)

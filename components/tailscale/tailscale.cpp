@@ -446,20 +446,8 @@ void TailscaleComponent::handle_fetching_map_state_() {
   }
 
   // Initialize DERP client for relay connectivity (ONLY on first map fetch)
-  // CRITICAL ARCHITECTURAL FIX: Use static variable to survive ALL state resets
-  //
-  // ARCHITECTURAL PROBLEM SOLVED:
-  // The state machine does: CONNECTED → INITIALIZING → ... → FETCHING_MAP → CONNECTED (every ~15s)
-  // This was destroying derp_client_ because:
-  // 1. std::unique_ptr gets reset during state transitions
-  // 2. Member variables (derp_initialized_) ALSO get reset during state transitions
-  //
-  // SOLUTION: Use STATIC variable inside function - persists across ALL calls
-  // - Static variables are allocated once and persist for program lifetime
-  // - Not tied to object lifecycle, survives even if TailscaleComponent is recreated
-  // - First time in FETCHING_MAP: Initialize DERP and set static flag
-  // - Subsequent times: Skip initialization, preserve existing connection
-  static bool derp_initialized = false;  // STATIC - survives all state resets
+  // Keep a successful relay across control reconnects, scoped to this object.
+  bool& derp_initialized = this->derp_initialized_; // Track successful init, not just allocation.
   if (!derp_initialized) {
     ESP_LOGI(TAG, "→ Initializing DERP relay client (first time)...");
     this->derp_client_ = std::make_unique<DerpClient>();
@@ -2561,6 +2549,7 @@ void TailscaleComponent::start_io_task_() {
     return;  // Already running
   }
 
+  this->io_task_exited_ = false;
   this->io_task_running_ = true;
 
   // Create the IO task with 4KB stack
@@ -2577,6 +2566,7 @@ void TailscaleComponent::start_io_task_() {
   if (result != pdPASS) {
     ESP_LOGE(TAG, "❌ Failed to create IO task");
     this->io_task_running_ = false;
+    this->io_task_exited_ = true;
     return;
   }
 
@@ -2584,27 +2574,14 @@ void TailscaleComponent::start_io_task_() {
 }
 
 // Stop the IO task (keeps queues intact for restart)
-void TailscaleComponent::stop_io_task_() {
-  if (this->io_task_handle_ == nullptr) {
-    return;
-  }
-
-  // Signal task to stop
+bool TailscaleComponent::stop_io_task_() {
   this->io_task_running_ = false;
-
-  // Wait for task to finish (up to 1 second)
-  for (int i = 0; i < 100 && eTaskGetState(this->io_task_handle_) != eDeleted; i++) {
+  if (!this->io_task_handle_) return true;
+  for (unsigned i = 0; i < 200 && !this->io_task_exited_.load(); ++i)
     vTaskDelay(pdMS_TO_TICKS(10));
-  }
-
-  // DO NOT delete queues here - they need to persist for task restart
-  // Queues are only cleaned up when component is destroyed
-  // The task will be recreated with the same queues by start_io_task_()
-
-  // Reset task handle so start_io_task_() can create a new one
+  if (!this->io_task_exited_.load()) return false;
   this->io_task_handle_ = nullptr;
-
-  ESP_LOGI(TAG, "✓ Stopped IO task (queues preserved for restart)");
+  return true;
 }
 
 // Static task function that blocks on select() for energy efficiency
@@ -2729,6 +2706,7 @@ void TailscaleComponent::io_task_func_(void* arg) {
   }
 
   ESP_LOGI(TAG, "IO Task exiting");
+  self->io_task_exited_.store(true); // Last component access before self deletion.
   vTaskDelete(nullptr);
 }
 
@@ -4069,7 +4047,7 @@ bool TailscaleComponent::perform_stun_query_() {
   bool task_was_running = this->io_task_running_;
   if (task_was_running) {
     ESP_LOGD(TAG, "Pausing IO task for STUN query");
-    this->stop_io_task_();
+    if (!this->stop_io_task_()) { this->transition_to(TailscaleState::ERROR); return false; }
     vTaskDelay(pdMS_TO_TICKS(50));  // Give task time to stop
   }
 

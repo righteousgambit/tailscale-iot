@@ -24,6 +24,7 @@
 #include <netinet/in.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <atomic>
 #include "freertos/queue.h"
 
 // WireGuardSession adapter: Uses esp_wireguard library WITHOUT creating netif
@@ -270,18 +271,19 @@ class TailscaleComponent : public PollingComponent {
 
   // Array of pointers to buffers (allocated individually to reduce heap fragmentation)
   // Allocating 8 x 1.6KB blocks is much safer than one contiguous 13KB block.
-  PacketBuffer* packet_pool_[PACKET_POOL_SIZE];
+  PacketBuffer* packet_pool_[PACKET_POOL_SIZE]{};
   
   TaskHandle_t io_task_handle_{nullptr};      // FreeRTOS task handle
   QueueHandle_t free_buffer_queue_{nullptr};  // Queue of pointers to available buffers
   QueueHandle_t ready_packet_queue_{nullptr}; // Queue of pointers to filled packets
   
-  volatile bool io_task_running_{false};      // Flag to stop task
-  volatile bool control_plane_data_available_{false}; // Flag for TCP data availability
-  volatile bool monitor_tcp_{true};           // Control flag to pause/resume TCP monitoring
+  std::atomic<bool> io_task_exited_{true};
+  std::atomic<bool> io_task_running_{false};      // Flag to stop task
+  std::atomic<bool> control_plane_data_available_{false}; // Flag for TCP data availability
+  std::atomic<bool> monitor_tcp_{true};           // Control flag to pause/resume TCP monitoring
   
   void start_io_task_();                      // Start the IO task
-  void stop_io_task_();                       // Stop the IO task
+  bool stop_io_task_();                       // Stop the IO task
   static void io_task_func_(void* arg);       // Static task function
   
   void handle_disco_packet_(uint8_t* buf, size_t len, struct sockaddr_in* src);    // Handle Disco protocol
@@ -322,6 +324,7 @@ class TailscaleComponent : public PollingComponent {
   std::unique_ptr<Ts2021Transport> ts2021_transport_;
   std::unique_ptr<Ts2021Upgrade> upgrade_channel_;
   std::unique_ptr<DerpClient> derp_client_;
+  bool derp_initialized_{false};
 
   // MULTI-PEER SUPPORT: Replace single wg_session_ with per-peer sessions
   std::vector<PeerSession> peer_sessions_;                  // Active peer sessions (max MAX_PEERS)
@@ -335,7 +338,7 @@ class TailscaleComponent : public PollingComponent {
 
   // SHARED WIREGUARD DEVICE: ONE device for all peers (minimizes memory usage)
   std::unique_ptr<WireGuardDeviceManager> wg_device_manager_;
-  // derp_initialized_ removed - now using static variable in handle_fetching_map_state_() for true persistence
+  // Relay initialization success is scoped to this component instance.
 
   // LWIP NETWORK INTERFACE: Virtual netif for transparent socket support
   // Allows standard BSD sockets to work over Tailscale (web server, etc.)
