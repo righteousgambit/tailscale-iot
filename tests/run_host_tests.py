@@ -31,3 +31,5 @@ with tempfile.TemporaryDirectory(prefix='tailscale-iot-host-') as directory:
     print('TS2021 transport: host syntax check passed')
 
 subprocess.run([sys.executable, str(root / "tests/check_io_shutdown.py")], check=True)
+
+subprocess.run([sys.executable, str(root / 'tests/check_peer_removal.py')], check=True)

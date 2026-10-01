@@ -132,9 +132,11 @@ void WireGuardDeviceManager::remove_peer(const std::string& peer_tailscale_ip) {
     return;
   }
 
-  // Remove from receiver_index mapping
-  if (it->second.receiver_index != 0) {
-    this->receiver_to_peer_.erase(it->second.receiver_index);
+  // Both initiation directions and rekeys can leave multiple receiver indexes.
+  // Revocation must remove every route to the peer before its slot is reused.
+  for (auto index = this->receiver_to_peer_.begin(); index != this->receiver_to_peer_.end();) {
+    if (index->second == peer_tailscale_ip) index = this->receiver_to_peer_.erase(index);
+    else ++index;
   }
 
   // Free the peer slot in the device's internal array by marking it invalid
