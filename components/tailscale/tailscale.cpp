@@ -1960,6 +1960,7 @@ bool TailscaleComponent::fetch_map_response_() {
   hostinfo.include_netinfo = true;                   // Enable NetInfo inside Hostinfo
 
   map_payload.hostinfo_json = build_hostinfo_json(hostinfo);
+  map_payload.keep_alive = true;   // Request server keepalives on the persistent response.
   map_payload.stream = true;        // Must be true to receive initial map response and updates
   map_payload.read_only = false;    // Must be false to get full map response (not just lite update)
   map_payload.omit_peers = false;   // Must be false with stream=true (headscale protocol requirement)
@@ -4627,9 +4628,9 @@ bool TailscaleComponent::send_map_keepalive_() {
 
   // CRITICAL: Set KeepAlive to true for keepalive requests
   map_payload.keep_alive = true;
-  map_payload.stream = true;  // REQUIRED for online status (Headscale sets IsOnline=true only for Stream=true)
+  map_payload.stream = false;  // Endpoint mutations use a separate finite request.
   map_payload.read_only = false;
-  map_payload.omit_peers = true;  // Minimize response size - server sends just {"KeepAlive":true} (18 bytes)
+  map_payload.omit_peers = true;  // Finite endpoint updates need no peer map.
 
   // Include all discovered endpoints (local + external)
   if (!this->discovered_endpoints_.empty()) {
@@ -4646,7 +4647,7 @@ bool TailscaleComponent::send_map_keepalive_() {
   }
 
   std::string payload_json = render_map_request(map_payload);
-  ESP_LOGI(TAG, "DEBUG: Keepalive payload (%zu bytes): %s", payload_json.length(), payload_json.c_str());
+  ESP_LOGD(TAG, "Endpoint update: %zu bytes", payload_json.size());
 
   // Send keepalive map request via HTTP/2
   const char *response_ptr = nullptr;
@@ -4662,47 +4663,13 @@ bool TailscaleComponent::send_map_keepalive_() {
     return false;
   }
 
-  // CRITICAL: Send keepalive on the persistent stream (stream 3) instead of creating new streams
-  // The persistent stream was opened with the initial MapRequest (Stream=true)
-  // We must send subsequent keepalives ON THE SAME STREAM to keep the connection alive
-  // The server will respond with {"KeepAlive":true} on the same stream
-  ESP_LOGI(TAG, "→ Sending keepalive on persistent stream...");
-
-  if (!this->ts2021_transport_->http2_send_on_persistent_stream(payload_json)) {
-    ESP_LOGE(TAG, "Failed to send keepalive on persistent stream");
+  // The original POST was half-closed with END_STREAM. For modern capability
+  // versions, streaming maps are read-only; publish changes on a new stream.
+  if (!this->ts2021_transport_->http2_post_json(scheme, this->control_authority_,
+      "/machine/map", payload_json, response_ptr, response_size, status, 5000, true, false)) {
     return false;
   }
-
-  ESP_LOGI(TAG, "✓ Keepalive sent on persistent stream (%zu bytes)", payload_json.length());
-
-  // The response will be received asynchronously via check_server_keepalive_()
-  // which calls http2_read_next_message() and will see the server's {"KeepAlive":true} response
-
-  // Note: We don't need to parse the keepalive response - the server acknowledges with HTTP 200
-  // and may send an empty or minimal response since OmitPeers=true
-
-  // KEEP control plane alive after keepalive to avoid OOM crashes
-  // Previously: closed control plane to free ~70KB for DERP connections
-  // Problem: Causes out-of-memory crashes when reconnecting due to 16KB buffer allocation
-  // Solution: Keep control plane alive permanently
-  // if (!transport_ready) {
-  //   ESP_LOGI(TAG, "→ Closing control plane to free memory...");
-  //   if (this->ts2021_transport_) {
-  //     this->ts2021_transport_->reset();
-  //   }
-  //   if (this->upgrade_channel_) {
-  //     this->upgrade_channel_->close();
-  //     this->upgrade_channel_.reset();
-  //   }
-  //   this->noise_session_.reset();
-  //   this->noise_session_ = esphome::make_unique<NoiseSession>();
-  //   if (!this->noise_session_->initialize_ik()) {
-  //     ESP_LOGE(TAG, "Failed to initialize Noise session after reset");
-  //   }
-  //   ESP_LOGI(TAG, "   ✓ Control plane closed (freed ~70KB for DERP)");
-  // }
-
-  return true;
+  return status >= 200 && status < 300;
 } // Correct closing brace for send_map_keepalive_
 
 // Check for incoming server keepalive messages on persistent streaming connection
@@ -4802,10 +4769,7 @@ bool TailscaleComponent::check_server_keepalive_() {
     }
   }
 
-  // Event-Driven Read: Only attempt to read if IO task signaled data
-  if (!this->control_plane_data_available_) {
-    return false;
-  }
+  // Decrypted frames can remain buffered after select() reports no socket bytes.
   
   // Clear flag and read
   this->control_plane_data_available_ = false;

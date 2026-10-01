@@ -104,3 +104,10 @@ make build        # Build the firmware
 Once the node comes online you can continue iterating on `esp32-ts.yaml` or
 switch to your own configuration files. Subsequent `esphome run` invocations
 will reuse the `.esphome/` build cache for faster rebuilds.
+
+## Protocol regression tests and port findings
+
+Run `python3 tests/run_host_tests.py` with clang++ to exercise control-plane
+framing and status decoding under ASan/UBSan without credentials or hardware.
+See [Paper S3 port findings](docs/paper-s3-port-findings.md) for the downstream
+hardware evidence, memory tradeoffs, and further improvements to review.
