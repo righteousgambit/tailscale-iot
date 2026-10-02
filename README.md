@@ -123,5 +123,19 @@ connected state. This adds fixed member storage, with no extra allocation.
 `python3 tests/check_connection_timers.py` compiles the actual endpoint-update
 block and member declarations under ASan/UBSan, exercising reconstruction at
 high uptime, failed-update retry throttling, and timer wrap. The other host tests
-remain applicable. ESPHome/C3 firmware and physical behavior still require
-validation on the upstream targets; Paper S3 validation uses its reader adapter.
+remain applicable. C3 physical behavior still requires validation on hardware;
+Paper S3 validation uses its reader adapter.
+
+### Credential-free ESP32-C3 build check
+
+```sh
+python -m pip install esphome==2025.6.1
+esphome compile tests/esp32-c3-build.yaml
+```
+
+The fixture compiles the component for `esp32-c3-devkitm-1` with ESP-IDF 5.3.2,
+an empty auth key and dummy Wi-Fi values. It requires neither `secrets.yaml` nor
+hardware. Do not flash it. The GitHub Actions build uses the same command.
+Both this fixture and the original example (with dummy build-only secrets)
+compiled successfully on 2026-10-01. This validates compilation/linking, not
+ESP32-C3 runtime behavior, memory headroom under network load or enrollment.

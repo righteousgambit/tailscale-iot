@@ -147,8 +147,9 @@ also includes relay, enrollment, key-policy and PSRAM changes outside this patch
 - A later reader build passed cached metadata/page rendering for that downloaded
   book, endpoint update during rendering, post-reading catalog access and rekeying.
 
-This exact upstream branch has **not** been flashed to an ESP32-C3 or compiled as
-an ESPHome firmware here. Host tests do not verify cryptographic algorithms or
+This upstream branch compiles for ESP32-C3 with ESPHome 2025.6.1 and ESP-IDF 5.3.2
+(both the original example with dummy secrets and the credential-free fixture).
+It has **not** been flashed to an ESP32-C3. Host tests do not verify cryptographic algorithms or
 promise production readiness. Initial map parsing still follows the original
 path; these framing fixtures cover subsequent persistent messages. Full HPACK,
 IPv6, fragmented WebSocket messages, incremental peer-map application, reconnect
