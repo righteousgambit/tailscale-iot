@@ -1029,9 +1029,8 @@ void TailscaleComponent::handle_connected_state_() {
         
         if (wg_peer != nullptr) {
           // Peer is active - check if we need to re-initiate handshake
-          // CRITICAL FIX: Only re-initiate if handshake NOT established
-          // Re-keying while session is active causes 30+ second crypto blocking
-          if (this->wg_device_manager_->is_handshake_established(peer.tailscale_ip)) {
+          // Renew aged active sessions while retaining current-key transport.
+          if (!this->wg_device_manager_->needs_rekey(peer.tailscale_ip)) {
             // Session established - just send keepalive
             ESP_LOGD(TAG, "🔄 Peer[%zu] %s: Session active, sending keepalive", i, peer.hostname.c_str());
             this->wg_device_manager_->send_peer_keepalive(peer.tailscale_ip);

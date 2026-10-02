@@ -139,3 +139,38 @@ hardware. Do not flash it. The GitHub Actions build uses the same command.
 Both this fixture and the original example (with dummy build-only secrets)
 compiled successfully on 2026-10-01. This validates compilation/linking, not
 ESP32-C3 runtime behavior, memory headroom under network load or enrollment.
+
+### WireGuard session regression coverage
+
+After the ESPHome fixture has fetched the pinned `esp_wireguard` 0.4.2 dependency,
+run real cryptography on the host (clang, pkg-config and libsodium required):
+
+```sh
+python3 tests/check_wireguard_crypto.py \
+  --wireguard-source tests/.esphome/build/tailscale-c3-build/.piolibdeps/tailscale-c3-build/esp_wireguard/src
+```
+
+This compiles the actual manager and dependency under ASan/UBSan. It checks
+multiple peers, both initiation directions, traffic during pending renewal,
+three timed rollovers, delayed old-key packets, replay/corruption rejection,
+hard time/message expiration, receiver-cache bounds, peer removal and accepting
+an incoming session after reconstructing the manager. The C3 workflow runs this
+check after compilation. ESPHome clock/watchdog/platform declarations are stubbed
+for the host check; it does not validate C3 hardware, FreeRTOS races or every
+control-plane/network interoperability case.
+
+Transport readiness now remains separate from renewal demand. Active-key traffic
+continues while an authenticated renewal is pending; the hard rejection limits
+still apply. Responses match the pending handshake's receiver index rather than
+excluding established peers. Incoming data chooses the current, pending or
+previous key by receiver index, authenticates and checks replay before promoting
+the pending key, and never delivers an empty keepalive as an inner IP packet.
+Receiver routes are pruned when sessions are created to retain only indexes backed
+by those three key slots. No per-packet cache scan or new buffer allocation is
+introduced by the pruning.
+
+The original manager at `01103df` was used as a negative control: with the same
+actual-crypto fixture and dependency, an authenticated incoming renewal failed
+when its handshake response was rejected. The corrected manager passes. This
+identifies a reproduced upstream rekey defect; it does not identify the cause of
+the separate intermittent Paper S3 hardware data-authentication mismatch.
