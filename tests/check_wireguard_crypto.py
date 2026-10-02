@@ -37,6 +37,7 @@ fixture=r'''
 #include <new>
 extern "C" {
 #include "wireguard.h"
+#include "crypto.h"
 uint32_t fixture_time=1000;
 uint32_t wireguard_sys_now() { return fixture_time; }
 void wireguard_random_bytes(void* p,size_t n) {randombytes_buf(p,n);}
@@ -50,6 +51,7 @@ using esphome::tailscale::WireGuardDeviceManager;
 struct Packet {int src,dst;std::vector<uint8_t> data;};
 struct InspectedManager : WireGuardDeviceManager {
  size_t receiverRoutes() const {return receiver_to_peer_.size();}
+ static size_t payloadLimit() {return MAX_IP_PACKET_SIZE;}
 };
 int main(){
  assert(sodium_init()>=0); InspectedManager m[3];uint8_t sk[3][32],pk[3][32];std::deque<Packet> q;
@@ -63,6 +65,15 @@ int main(){
  assert(m[0].start_peer_handshake("1"));assert(m[0].start_peer_handshake("2"));drain();
  int deliveries=0;for(int i=1;i<3;++i)m[i].set_decrypt_callback([&](const std::string&,const uint8_t* p,size_t n){assert(n==32&&p[0]==0x45);++deliveries;});
  uint8_t ip[32]={0x45};assert(m[0].send_ip_packet("1",ip,32));assert(m[0].send_ip_packet("2",ip,32));drain();assert(deliveries==2);
+ // Authenticated oversized input must be rejected before allocating plaintext.
+ std::vector<uint8_t> oversizedPlain(((InspectedManager::payloadLimit()+15)&~size_t(15))+16,0);
+ oversizedPlain[0]=0x45;
+ std::vector<uint8_t> oversized(oversizedPlain.size()+32,0);oversized[0]=4;
+ auto* sendKey=&m[0].get_peer("1")->curr_keypair;
+ U32TO8_LITTLE(oversized.data()+4,sendKey->remote_index);
+ U64TO8_LITTLE(oversized.data()+8,sendKey->sending_counter);
+ wireguard_encrypt_packet(oversized.data()+16,oversizedPlain.data(),oversizedPlain.size(),sendKey);
+ assert(!m[1].receive_wg_packet(oversized.data(),oversized.size()));assert(deliveries==2);
  // An incoming rekey for one peer must preserve another peer's live session.
  assert(m[1].start_peer_handshake("0"));drain();
  assert(m[0].send_ip_packet("2",ip,32));drain();assert(deliveries==3);

@@ -489,8 +489,10 @@ bool WireGuardDeviceManager::handle_handshake_response_(const uint8_t* msg, size
 }
 
 bool WireGuardDeviceManager::handle_transport_data_(const uint8_t* msg, size_t len) {
-  if (len < TRANSPORT_OVERHEAD) {
-    ESP_LOGE(TAG, "Transport data too small: %d bytes", len);
+  constexpr size_t max_transport_size =
+      ((MAX_IP_PACKET_SIZE + 15) & ~size_t(15)) + TRANSPORT_OVERHEAD;
+  if (len < TRANSPORT_OVERHEAD || len > max_transport_size) {
+    ESP_LOGE(TAG, "Invalid transport data size: %u bytes", unsigned(len));
     return false;
   }
 

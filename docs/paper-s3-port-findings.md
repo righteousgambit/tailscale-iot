@@ -177,3 +177,12 @@ delayed, deadline-bound and missing acknowledgements with ASan/UBSan. These test
 stub scheduling; they do not validate FreeRTOS multicore timing or full upstream
 component destruction. The downstream Paper S3 build adds explicit socket,
 queue, route and protocol cleanup and is undergoing live reconnect validation.
+
+## Transport allocation bound
+
+Reject transport messages above the configured 1,420-byte inner packet limit,
+rounded up for WireGuard's 16-byte padding, plus the 32-byte header/tag overhead.
+The check runs before plaintext allocation and retains empty keepalives. The
+actual-manager crypto fixture constructs a valid authenticated oversized packet
+and verifies rejection without delivery; normal traffic and rekeys still pass.
+This adds no production buffer or allocation. Host timing remains stubbed.
